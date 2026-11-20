@@ -1,0 +1,53 @@
+name: CD
+
+# 自动化部署：push 到 main 后，自动部署到 InstaBox 的 wellknow-box。
+# 也支持在 Actions 页面手动触发（workflow_dispatch）。
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cd-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: 部署到 InstaBox
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 安装 InstaBox CLI
+        run: npm install -g instabox@latest
+
+      - name: 打包源码
+        run: |
+          tar czf /tmp/app.tar.gz --exclude='.git' --exclude='dist' .
+          echo "包大小: $(du -h /tmp/app.tar.gz | cut -f1)"
+
+      - name: 上传源码到机器
+        env:
+          INSTABOX_API_KEY: ${{ secrets.INSTABOX_API_KEY }}
+        run: |
+          # --stdin 支持任意大小，直接把 tar.gz 管道给远端解压
+          cat /tmp/app.tar.gz | instabox exec wellknow-box --stdin -- \
+            bash -c 'mkdir -p /data/instabox-go-starter && tar xz -C /data/instabox-go-starter && echo 源码上传完成'
+
+      - name: 执行部署（编译+优雅重启+健康检查+失败回滚+自愈）
+        env:
+          INSTABOX_API_KEY: ${{ secrets.INSTABOX_API_KEY }}
+        run: |
+          instabox exec wellknow-box -- \
+            bash -lc "cd /data/instabox-go-starter && chmod +x scripts/*.sh && VERSION=${GITHUB_SHA::7} APP_PORT=8080 bash scripts/deploy.sh"
+
+      - name: 部署后验证
+        env:
+          INSTABOX_API_KEY: ${{ secrets.INSTABOX_API_KEY }}
+        run: |
+          sleep 3
+          instabox exec wellknow-box -- \
+            bash -lc 'echo "--- 健康状态 ---"; curl -fsS http://127.0.0.1:8080/healthz; echo; echo "--- 版本信息 ---"; curl -fsS http://127.0.0.1:8080/api/info'

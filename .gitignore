@@ -1,0 +1,21 @@
+# 构建产物
+/bin/
+/dist/
+*.exe
+*.test
+
+# 覆盖率
+coverage.out
+coverage.html
+
+# 编辑器
+.idea/
+.vscode/
+*.swp
+
+# 系统
+.DS_Store
+
+# 本地环境
+.env
+*.local
