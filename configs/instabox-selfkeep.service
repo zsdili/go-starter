@@ -1,0 +1,14 @@
+[Unit]
+Description=InstaBox self keepalive (activity lease renewer)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/bin/bash /data/gobin/scripts/self-keepalive.sh
+Restart=always
+RestartSec=10
+User=user
+
+[Install]
+WantedBy=multi-user.target
