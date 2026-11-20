@@ -40,6 +40,7 @@ ln -sfn "$BIN_DIR/server.${VERSION}" "$CURRENT_LINK"
 log "已切换当前版本 -> server.${VERSION}"
 
 # 3) 优雅停止旧进程
+# 先杀 PID 文件记录的进程，再兜底杀掉所有占用端口/可执行文件的残留进程
 stop_old() {
   if [ -f "$PID_FILE" ]; then
     old_pid="$(cat "$PID_FILE")"
@@ -54,6 +55,25 @@ stop_old() {
     fi
     rm -f "$PID_FILE"
   fi
+  # 兜底：杀掉所有运行本服务二进制的残留进程（含历史手动启动、未写 PID 的进程）
+  for p in $(pgrep -f "$BIN_DIR/server" 2>/dev/null || true); do
+    [ "$p" = "$$" ] && continue
+    log "清理残留进程 $p"
+    kill -TERM "$p" 2>/dev/null || true
+  done
+  sleep 1
+  for p in $(pgrep -f "$BIN_DIR/server" 2>/dev/null || true); do
+    [ "$p" = "$$" ] && continue
+    kill -KILL "$p" 2>/dev/null || true
+  done
+  # 确认端口已释放
+  for _ in $(seq 1 10); do
+    if curl -fsS --max-time 1 "$HEALTH_URL" >/dev/null 2>&1; then
+      sleep 0.5
+    else
+      break
+    fi
+  done
 }
 stop_old
 
@@ -65,16 +85,20 @@ new_pid=$!
 echo "$new_pid" > "$PID_FILE"
 log "新进程 PID=$new_pid"
 
-# 5) 健康检查（最多等 15 秒）
+# 5) 健康检查（最多等 15 秒）：必须"新进程存活"且"健康接口 200"同时满足
 healthy=0
 for i in $(seq 1 30); do
-  if curl -fsS --max-time 2 "$HEALTH_URL" >/dev/null 2>&1; then
-    healthy=1
+  if ! kill -0 "$new_pid" 2>/dev/null; then
+    log "新进程 $new_pid 已退出，停止等待"
     break
   fi
-  # 进程若提前退出，停止等待
-  if ! kill -0 "$new_pid" 2>/dev/null; then
-    break
+  if curl -fsS --max-time 2 "$HEALTH_URL" >/dev/null 2>&1; then
+    # 再校验版本，确认响应来自新部署的版本而非残留旧进程
+    served_version="$(curl -fsS --max-time 2 http://127.0.0.1:${PORT}/api/info 2>/dev/null | grep -o "\"version\":\"[^\"]*\"" | cut -d'"' -f4 || true)"
+    if [ "$served_version" = "$VERSION" ]; then
+      healthy=1
+      break
+    fi
   fi
   sleep 0.5
 done
